@@ -18,10 +18,6 @@ import numpy as np
 import time
 from datetime import datetime
 import os
-from dotenv import load_dotenv
-
-# .env dosyasını yükle
-load_dotenv()
 
 # ─── Sayfa Yapılandırması ─────────────────────────────────────────────────
 st.set_page_config(
