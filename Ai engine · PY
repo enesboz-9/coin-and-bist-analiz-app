@@ -1,0 +1,367 @@
+"""
+modules/ai_engine.py
+AI Sinyal Toplayıcı: Groq, Gemini ve Claude API entegrasyonu
+"""
+
+import os
+import json
+import streamlit as st
+from typing import Dict, Optional, Tuple
+import pandas as pd
+
+# ─── API İstemcileri ──────────────────────────────────────────────────────
+
+def _api_key_al(key_adi: str) -> Optional[str]:
+    """Önce st.secrets, sonra env'den API anahtarı okur."""
+    try:
+        return st.secrets.get(key_adi)
+    except:
+        return os.getenv(key_adi)
+
+
+def groq_istemci_olustur():
+    """Groq istemcisi oluşturur."""
+    try:
+        from groq import Groq
+        api_key = _api_key_al("GROQ_API_KEY")
+        if not api_key:
+            return None
+        return Groq(api_key=api_key)
+    except Exception as e:
+        return None
+
+
+def gemini_istemci_olustur():
+    """Gemini istemcisi oluşturur."""
+    try:
+        import google.generativeai as genai
+        api_key = _api_key_al("GEMINI_API_KEY")
+        if not api_key:
+            return None
+        genai.configure(api_key=api_key)
+        return genai.GenerativeModel("gemini-1.5-flash")
+    except Exception as e:
+        return None
+
+
+def claude_istemci_olustur():
+    """Claude istemcisi oluşturur."""
+    try:
+        import anthropic
+        api_key = _api_key_al("ANTHROPIC_API_KEY")
+        if not api_key:
+            return None
+        return anthropic.Anthropic(api_key=api_key)
+    except Exception as e:
+        return None
+
+
+# ─── Groq: Hızlı Teknik Analiz Skoru ─────────────────────────────────────
+
+def groq_teknik_analiz(sembol: str, istatistikler: Dict, zaman_dilimi: str) -> Dict:
+    """
+    Groq API ile hızlı teknik analiz yaparak Al/Sat/Tut skoru üretir.
+    """
+    istemci = groq_istemci_olustur()
+    
+    if not istemci:
+        return {
+            "skor": 50,
+            "sinyal": "TANIMLANMADI",
+            "ozet": "Groq API anahtarı bulunamadı.",
+            "guc": "Düşük",
+            "detay": {}
+        }
+    
+    prompt = f"""Sen uzman bir teknik analist yapay zekasısın. Aşağıdaki teknik göstergeleri hızla analiz et ve JSON formatında yanıt ver.
+
+SEMBOL: {sembol}
+ZAMAN DİLİMİ: {zaman_dilimi}
+
+TEKNİK GÖSTERGELER:
+- RSI (14): {istatistikler.get('rsi_14', 'N/A'):.1f}
+- RSI (9): {istatistikler.get('rsi_9', 'N/A'):.1f}
+- MACD: {istatistikler.get('macd', 'N/A'):.4f}
+- MACD Histogram: {istatistikler.get('macd_hist', 'N/A'):.4f}
+- Stochastic K: {istatistikler.get('stoch_k', 'N/A'):.1f}
+- ADX (Trend Gücü): {istatistikler.get('adx', 'N/A'):.1f}
+- ATR%: {istatistikler.get('atr_pct', 'N/A'):.2f}
+- BB Yüzdesi: {istatistikler.get('bb_pct', 'N/A'):.2f}
+- MFI (Para Akışı): {istatistikler.get('mfi', 'N/A'):.1f}
+- CCI: {istatistikler.get('cci', 'N/A'):.1f}
+- Williams %R: {istatistikler.get('willr', 'N/A'):.1f}
+- CMF: {istatistikler.get('cmf', 'N/A'):.3f}
+- VWAP Üstünde: {istatistikler.get('vwap_ustunde', 'N/A')}
+- Trend Yönü (EMA50/200): {istatistikler.get('trend_yonu', 'N/A')}
+- Golden Cross: {istatistikler.get('golden_cross', False)}
+- Death Cross: {istatistikler.get('death_cross', False)}
+- Teknik Skor: {istatistikler.get('teknik_skor', 50):.1f}/100
+
+Sadece bu JSON formatında yanıt ver, başka metin ekleme:
+{{
+  "sinyal": "AL" veya "SAT" veya "TUT",
+  "skor": 0-100 arası sayı (100=güçlü AL, 0=güçlü SAT, 50=TUT),
+  "guc": "Güçlü" veya "Orta" veya "Zayıf",
+  "kisa_ozet": "2-3 cümle Türkçe özet",
+  "guclu_sinyaller": ["sinyal1", "sinyal2"],
+  "zayif_sinyaller": ["sinyal1", "sinyal2"],
+  "destek_seviyesi": "yaklaşık değer veya N/A",
+  "direnc_seviyesi": "yaklaşık değer veya N/A"
+}}"""
+
+    try:
+        response = istemci.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=600,
+            temperature=0.1,
+        )
+        
+        content = response.choices[0].message.content.strip()
+        
+        # JSON temizleme
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+        
+        sonuc = json.loads(content)
+        sonuc["ham_yanit"] = content
+        return sonuc
+    
+    except json.JSONDecodeError as e:
+        return {
+            "sinyal": "TUT",
+            "skor": 50,
+            "guc": "Belirsiz",
+            "kisa_ozet": f"JSON parse hatası: {str(e)[:100]}",
+            "guclu_sinyaller": [],
+            "zayif_sinyaller": [],
+        }
+    except Exception as e:
+        hata_msg = str(e)
+        if "rate_limit" in hata_msg.lower():
+            hata_msg = "Groq API rate limit aşıldı. Lütfen bekleyin."
+        elif "api_key" in hata_msg.lower():
+            hata_msg = "Groq API anahtarı geçersiz."
+        
+        return {
+            "sinyal": "TUT",
+            "skor": 50,
+            "guc": "Belirsiz",
+            "kisa_ozet": f"Groq API hatası: {hata_msg[:150]}",
+            "guclu_sinyaller": [],
+            "zayif_sinyaller": [],
+        }
+
+
+# ─── Gemini: Temel Analiz Skoru ───────────────────────────────────────────
+
+def gemini_temel_analiz(sembol: str, sirket_bilgisi: Dict, haberler: list) -> Dict:
+    """
+    Gemini API ile şirket bilgileri ve haber başlıklarını analiz ederek
+    temel analiz skoru üretir.
+    """
+    istemci = gemini_istemci_olustur()
+    
+    if not istemci:
+        return {
+            "skor": 50,
+            "sinyal": "TANIMLANMADI",
+            "ozet": "Gemini API anahtarı bulunamadı.",
+            "duyarlilik": "Nötr",
+        }
+    
+    haber_metni = "\n".join([
+        f"- [{h.get('tarih','')}] {h.get('baslik','')} ({h.get('kaynak','')})"
+        for h in haberler[:8]
+    ]) if haberler else "Haber bulunamadı."
+    
+    # Finansal metrikleri formatla
+    pe = sirket_bilgisi.get('pe_orani')
+    pb = sirket_bilgisi.get('pb_orani')
+    temettü = sirket_bilgisi.get('temettü')
+    beta = sirket_bilgisi.get('beta')
+    piyasa_degeri = sirket_bilgisi.get('piyasa_degeri', 0)
+    
+    prompt = f"""Sen uzman bir temel analist yapay zekasısın. Aşağıdaki şirket bilgilerini ve haberleri analiz ederek JSON formatında yanıt ver.
+
+SEMBOL: {sembol}
+ŞİRKET ADI: {sirket_bilgisi.get('ad', sembol)}
+SEKTÖR: {sirket_bilgisi.get('sektor', 'Bilinmiyor')}
+SANAYİ: {sirket_bilgisi.get('sanayi', 'Bilinmiyor')}
+
+FİNANSAL METRIKLER:
+- Piyasa Değeri: {piyasa_degeri:,.0f} {sirket_bilgisi.get('para_birimi','USD')} 
+- F/K Oranı (P/E): {pe if pe else 'N/A'}
+- Fiyat/Defter (P/B): {pb if pb else 'N/A'}
+- Temettü Verimi: {f'{temettü*100:.2f}%' if temettü else 'N/A'}
+- Beta: {beta if beta else 'N/A'}
+- EPS: {sirket_bilgisi.get('eps', 'N/A')}
+- 52H Yüksek: {sirket_bilgisi.get('52h_yuksek', 'N/A')}
+- 52H Düşük: {sirket_bilgisi.get('52h_dusuk', 'N/A')}
+
+SON HABERLER VE GELİŞMELER:
+{haber_metni}
+
+ŞİRKET HAKKINDA:
+{sirket_bilgisi.get('aciklama', 'Bilgi yok.')[:400]}
+
+Sadece bu JSON formatında yanıt ver:
+{{
+  "temel_skor": 0-100 arası sayı,
+  "haber_duyarlilik": "Pozitif" veya "Negatif" veya "Nötr",
+  "degerleme": "Ucuz" veya "Adil" veya "Pahalı" veya "Belirsiz",
+  "sinyal": "AL" veya "SAT" veya "TUT",
+  "ozet": "3-4 cümle Türkçe temel analiz özeti",
+  "guclu_yonler": ["madde1", "madde2"],
+  "riskler": ["risk1", "risk2"],
+  "katalizorler": ["katalizor1"]
+}}"""
+
+    try:
+        response = istemci.generate_content(prompt)
+        content = response.text.strip()
+        
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+        
+        sonuc = json.loads(content)
+        return sonuc
+    
+    except json.JSONDecodeError:
+        return {
+            "temel_skor": 50,
+            "haber_duyarlilik": "Nötr",
+            "degerleme": "Belirsiz",
+            "sinyal": "TUT",
+            "ozet": "Temel analiz yapılamadı (JSON hatası).",
+            "guclu_yonler": [],
+            "riskler": [],
+        }
+    except Exception as e:
+        hata_msg = str(e)
+        if "quota" in hata_msg.lower() or "limit" in hata_msg.lower():
+            hata_msg = "Gemini API kota limiti aşıldı."
+        
+        return {
+            "temel_skor": 50,
+            "haber_duyarlilik": "Nötr",
+            "degerleme": "Belirsiz",
+            "sinyal": "TUT",
+            "ozet": f"Gemini API hatası: {hata_msg[:150]}",
+            "guclu_yonler": [],
+            "riskler": [],
+        }
+
+
+# ─── Claude: Nihai Strateji Oluşturma ─────────────────────────────────────
+
+def claude_strateji_olustur(
+    sembol: str,
+    zaman_dilimi: str,
+    teknik_sonuc: Dict,
+    temel_sonuc: Dict,
+    istatistikler: Dict,
+    sirket_bilgisi: Dict,
+) -> str:
+    """
+    Claude API ile teknik + temel analizi birleştirerek kapsamlı
+    yatırım stratejisi ve risk uyarısı oluşturur.
+    """
+    istemci = claude_istemci_olustur()
+    
+    if not istemci:
+        return "⚠️ Claude API anahtarı bulunamadı. Lütfen API anahtarınızı ayarlayın."
+    
+    teknik_skor  = teknik_sonuc.get("skor", 50)
+    temel_skor   = temel_sonuc.get("temel_skor", 50)
+    bilesik_skor = round(teknik_skor * 0.6 + temel_skor * 0.4, 1)
+    
+    prompt = f"""Sen deneyimli bir portföy yöneticisi ve yatırım stratejistisin. Aşağıdaki kapsamlı analiz verilerini kullanarak {sembol} için profesyonel bir yatırım raporu hazırla.
+
+═══════════════════════════════════════
+SEMBOL: {sembol} | ZAMAN DİLİMİ: {zaman_dilimi}
+ŞİRKET: {sirket_bilgisi.get('ad', sembol)} | SEKTÖR: {sirket_bilgisi.get('sektor', 'N/A')}
+═══════════════════════════════════════
+
+📊 TEKNİK ANALİZ SONUÇLARI (Groq AI):
+• Sinyal: {teknik_sonuc.get('sinyal', 'N/A')} | Skor: {teknik_skor}/100 | Güç: {teknik_sonuc.get('guc', 'N/A')}
+• Özet: {teknik_sonuc.get('kisa_ozet', 'N/A')}
+• Güçlü Sinyaller: {', '.join(teknik_sonuc.get('guclu_sinyaller', []))}
+• Zayıf Sinyaller: {', '.join(teknik_sonuc.get('zayif_sinyaller', []))}
+• Destek: {teknik_sonuc.get('destek_seviyesi', 'N/A')} | Direnç: {teknik_sonuc.get('direnc_seviyesi', 'N/A')}
+
+📈 TEMEL ANALİZ SONUÇLARI (Gemini AI):
+• Sinyal: {temel_sonuc.get('sinyal', 'N/A')} | Skor: {temel_skor}/100
+• Haber Duyarlılığı: {temel_sonuc.get('haber_duyarlilik', 'N/A')}
+• Değerleme: {temel_sonuc.get('degerleme', 'N/A')}
+• Özet: {temel_sonuc.get('ozet', 'N/A')}
+• Güçlü Yönler: {', '.join(temel_sonuc.get('guclu_yonler', []))}
+• Riskler: {', '.join(temel_sonuc.get('riskler', []))}
+
+🔢 KİLİT GÖSTERGELER:
+• RSI(14): {istatistikler.get('rsi_14', 'N/A'):.1f} | ADX: {istatistikler.get('adx', 'N/A'):.1f} | ATR%: {istatistikler.get('atr_pct', 'N/A'):.2f}%
+• MACD Hist: {istatistikler.get('macd_hist', 'N/A'):.4f} | MFI: {istatistikler.get('mfi', 'N/A'):.1f}
+• Trend: {istatistikler.get('trend_yonu', 'N/A')} | VWAP Üstünde: {istatistikler.get('vwap_ustunde', 'N/A')}
+• Bileşik AI Skoru: {bilesik_skor}/100
+
+Lütfen aşağıdaki yapıda kapsamlı bir Türkçe rapor yaz:
+
+## 🎯 NİHAİ KARAR VE STRATEJİ
+
+**Bileşik Sinyal:** [AL / SAT / TUT] (Bileşik Skor: {bilesik_skor}/100)
+
+[2-3 cümle güçlü giriş]
+
+## 📋 ANALİZ SENARYOLARI
+
+**Boğa Senaryosu (Olası):**
+[Bu senaryo için koşullar ve beklentiler]
+
+**Ayı Senaryosu (Risk):**
+[Bu senaryo için koşullar ve riskler]
+
+## 💼 POZİSYON STRATEJİSİ
+
+**Giriş Planı:**
+- Optimal Giriş Bölgesi: [fiyat/koşul]
+- Aşamalı Alım: [varsa strateji]
+
+**Çıkış Planı:**
+- Hedef 1 (kısa): [fiyat veya %]
+- Hedef 2 (orta): [fiyat veya %]
+- Stop-Loss: [fiyat veya %]
+- Risk/Ödül Oranı: [hesapla]
+
+## ⚠️ RİSK DEĞERLENDİRMESİ
+
+**Risk Seviyesi:** [Düşük / Orta / Yüksek / Çok Yüksek]
+
+[Spesifik riskler ve azaltma yöntemleri]
+
+## 📅 ZAMAN ÇERÇEVESİ VE TAKİP
+
+[Ne zaman pozisyon açılmalı, ne zaman gözden geçirilmeli]
+
+---
+⚖️ **YASAL UYARI:** Bu analiz yatırım tavsiyesi değildir. Geçmiş performans gelecek sonuçları garanti etmez. Yatırım kararlarınızı profesyonel bir mali danışmana danışarak alın."""
+
+    try:
+        message = istemci.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return message.content[0].text
+    
+    except Exception as e:
+        hata_msg = str(e)
+        if "rate_limit" in hata_msg.lower():
+            return "⚠️ Claude API rate limit aşıldı. Lütfen birkaç dakika bekleyip tekrar deneyin."
+        elif "api_key" in hata_msg.lower() or "authentication" in hata_msg.lower():
+            return "⚠️ Claude API anahtarı geçersiz. Lütfen kontrol edin."
+        else:
+            return f"⚠️ Claude API hatası: {hata_msg[:300]}"
