@@ -1,0 +1,339 @@
+"""
+modules/technical_analysis.py
+Teknik analiz motoru: pandas_ta ile kapsamlı indikatör hesaplama
+"""
+
+import pandas as pd
+import numpy as np
+import pandas_ta as ta
+from typing import Optional, Dict, Tuple
+import warnings
+warnings.filterwarnings("ignore")
+
+
+# ─── Ana İndikatör Hesaplama ───────────────────────────────────────────────
+
+def tum_indiktorleri_hesapla(df: pd.DataFrame, zaman_dilimi: str = "Günlük") -> pd.DataFrame:
+    """
+    Zaman dilimine göre optimize edilmiş kapsamlı indikatör seti hesaplar.
+    Kısa vade: RSI, Stochastic, VWAP, ATR, CCI, Williams %R, MFI
+    Orta/Uzun vade: MACD, EMA 50/200, Bollinger, Ichimoku, PSAR, ADX, OBV
+    """
+    df = df.copy()
+    
+    try:
+        # ─── Trend İndikatörleri ───────────────────────────────────────
+        # EMA'lar
+        df["ema_9"]   = ta.ema(df["close"], length=9)
+        df["ema_21"]  = ta.ema(df["close"], length=21)
+        df["ema_50"]  = ta.ema(df["close"], length=50)
+        df["ema_100"] = ta.ema(df["close"], length=100)
+        df["ema_200"] = ta.ema(df["close"], length=200)
+        
+        # SMA'lar
+        df["sma_20"]  = ta.sma(df["close"], length=20)
+        df["sma_50"]  = ta.sma(df["close"], length=50)
+        df["sma_200"] = ta.sma(df["close"], length=200)
+        
+        # MACD
+        macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
+        if macd is not None and not macd.empty:
+            df["macd"]        = macd["MACD_12_26_9"]
+            df["macd_signal"] = macd["MACDs_12_26_9"]
+            df["macd_hist"]   = macd["MACDh_12_26_9"]
+        
+        # ─── Momentum İndikatörleri ─────────────────────────────────────
+        # RSI (çoklu periyot)
+        df["rsi_14"] = ta.rsi(df["close"], length=14)
+        df["rsi_9"]  = ta.rsi(df["close"], length=9)
+        
+        # Stochastic
+        stoch = ta.stoch(df["high"], df["low"], df["close"], k=14, d=3, smooth_k=3)
+        if stoch is not None and not stoch.empty:
+            df["stoch_k"] = stoch.iloc[:, 0]
+            df["stoch_d"] = stoch.iloc[:, 1]
+        
+        # Stochastic RSI
+        stochrsi = ta.stochrsi(df["close"], length=14, rsi_length=14, k=3, d=3)
+        if stochrsi is not None and not stochrsi.empty:
+            df["stochrsi_k"] = stochrsi.iloc[:, 0]
+            df["stochrsi_d"] = stochrsi.iloc[:, 1]
+        
+        # Williams %R
+        df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14)
+        
+        # CCI (Commodity Channel Index)
+        df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20)
+        
+        # ROC (Rate of Change)
+        df["roc"] = ta.roc(df["close"], length=10)
+        
+        # Momentum
+        df["mom"] = ta.mom(df["close"], length=10)
+        
+        # ─── Volatilite İndikatörleri ────────────────────────────────────
+        # Bollinger Bantları
+        bbands = ta.bbands(df["close"], length=20, std=2)
+        if bbands is not None and not bbands.empty:
+            df["bb_upper"] = bbands["BBU_20_2.0"]
+            df["bb_mid"]   = bbands["BBM_20_2.0"]
+            df["bb_lower"] = bbands["BBL_20_2.0"]
+            df["bb_width"] = bbands["BBB_20_2.0"]
+            df["bb_pct"]   = bbands["BBP_20_2.0"]
+        
+        # ATR (Average True Range)
+        df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+        df["atr_pct"] = df["atr"] / df["close"] * 100  # ATR yüzdesi
+        
+        # Keltner Kanalları
+        kc = ta.kc(df["high"], df["low"], df["close"], length=20, scalar=2)
+        if kc is not None and not kc.empty:
+            df["kc_upper"] = kc.iloc[:, 0]
+            df["kc_mid"]   = kc.iloc[:, 1]
+            df["kc_lower"] = kc.iloc[:, 2]
+        
+        # ─── Hacim İndikatörleri ─────────────────────────────────────────
+        # OBV (On Balance Volume)
+        df["obv"] = ta.obv(df["close"], df["volume"])
+        
+        # VWAP (Hacim Ağırlıklı Ortalama Fiyat) - kısa vade için kritik
+        try:
+            df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
+        except:
+            # VWAP hesaplanamaz ise manuel hesapla
+            df["vwap"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
+        
+        # MFI (Money Flow Index)
+        df["mfi"] = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
+        
+        # CMF (Chaikin Money Flow)
+        df["cmf"] = ta.cmf(df["high"], df["low"], df["close"], df["volume"], length=20)
+        
+        # VWMA
+        df["vwma"] = ta.vwma(df["close"], df["volume"], length=20)
+        
+        # ─── Trend Gücü ───────────────────────────────────────────────────
+        # ADX (Average Directional Index)
+        adx = ta.adx(df["high"], df["low"], df["close"], length=14)
+        if adx is not None and not adx.empty:
+            df["adx"]    = adx["ADX_14"]
+            df["dmp"]    = adx["DMP_14"]  # +DI
+            df["dmn"]    = adx["DMN_14"]  # -DI
+        
+        # Parabolic SAR
+        psar = ta.psar(df["high"], df["low"], df["close"])
+        if psar is not None and not psar.empty:
+            df["psar"] = psar.iloc[:, 0].fillna(psar.iloc[:, 1])
+        
+        # Ichimoku Bulutu
+        try:
+            ich = ta.ichimoku(df["high"], df["low"], df["close"])
+            if ich is not None and len(ich) > 0:
+                ich_df = ich[0]
+                if ich_df is not None and not ich_df.empty:
+                    cols = ich_df.columns.tolist()
+                    if len(cols) >= 4:
+                        df["ich_tenkan"]  = ich_df.iloc[:, 0]  # Tenkan-sen
+                        df["ich_kijun"]   = ich_df.iloc[:, 1]  # Kijun-sen
+                        df["ich_spanA"]   = ich_df.iloc[:, 2]  # Senkou Span A
+                        df["ich_spanB"]   = ich_df.iloc[:, 3]  # Senkou Span B
+        except Exception:
+            pass
+        
+        # ─── Özel Sinyal Sütunları ───────────────────────────────────────
+        df = sinyal_sütunları_hesapla(df)
+        
+    except Exception as e:
+        print(f"İndikatör hesaplama hatası: {e}")
+    
+    return df
+
+
+def sinyal_sütunları_hesapla(df: pd.DataFrame) -> pd.DataFrame:
+    """Al/Sat sinyal sütunlarını hesaplar."""
+    df = df.copy()
+    
+    try:
+        # Golden Cross / Death Cross
+        if "ema_50" in df.columns and "ema_200" in df.columns:
+            df["golden_cross"] = (
+                (df["ema_50"] > df["ema_200"]) & 
+                (df["ema_50"].shift(1) <= df["ema_200"].shift(1))
+            ).astype(int)
+            
+            df["death_cross"] = (
+                (df["ema_50"] < df["ema_200"]) & 
+                (df["ema_50"].shift(1) >= df["ema_200"].shift(1))
+            ).astype(int)
+            
+            df["trend_yonu"] = np.where(df["ema_50"] > df["ema_200"], "YUKARI", "ASAGI")
+        
+        # RSI Aşırı Alım/Satım
+        if "rsi_14" in df.columns:
+            df["rsi_asiri_satis"] = (df["rsi_14"] < 30).astype(int)
+            df["rsi_asiri_alim"]  = (df["rsi_14"] > 70).astype(int)
+            df["rsi_orta_zone"]   = ((df["rsi_14"] >= 40) & (df["rsi_14"] <= 60)).astype(int)
+        
+        # MACD Sinyal Kesişimi
+        if "macd" in df.columns and "macd_signal" in df.columns:
+            df["macd_al_sinyali"] = (
+                (df["macd"] > df["macd_signal"]) & 
+                (df["macd"].shift(1) <= df["macd_signal"].shift(1))
+            ).astype(int)
+            
+            df["macd_sat_sinyali"] = (
+                (df["macd"] < df["macd_signal"]) & 
+                (df["macd"].shift(1) >= df["macd_signal"].shift(1))
+            ).astype(int)
+        
+        # Bollinger Bant Sinyalleri
+        if "bb_lower" in df.columns and "bb_upper" in df.columns:
+            df["bb_alt_dokunma"] = (df["close"] <= df["bb_lower"]).astype(int)
+            df["bb_ust_dokunma"] = (df["close"] >= df["bb_upper"]).astype(int)
+            df["bb_squeeze"]     = (df["bb_width"] < df["bb_width"].rolling(20).mean() * 0.5).astype(int)
+        
+        # Stochastic Sinyal
+        if "stoch_k" in df.columns and "stoch_d" in df.columns:
+            df["stoch_al"] = (
+                (df["stoch_k"] < 20) & (df["stoch_k"] > df["stoch_d"])
+            ).astype(int)
+            df["stoch_sat"] = (
+                (df["stoch_k"] > 80) & (df["stoch_k"] < df["stoch_d"])
+            ).astype(int)
+        
+        # VWAP Sinyali
+        if "vwap" in df.columns:
+            df["vwap_ustunde"] = (df["close"] > df["vwap"]).astype(int)
+        
+        # Genel Al/Sat Skoru (0-100)
+        df["teknik_skor"] = hesapla_teknik_skor(df)
+        
+    except Exception as e:
+        print(f"Sinyal hesaplama hatası: {e}")
+    
+    return df
+
+
+def hesapla_teknik_skor(df: pd.DataFrame) -> pd.Series:
+    """0-100 arası teknik analiz skoru hesaplar."""
+    skor = pd.Series(50.0, index=df.index)
+    
+    try:
+        # RSI katkısı (25 puan)
+        if "rsi_14" in df.columns:
+            rsi_skorü = df["rsi_14"].apply(lambda x: 
+                max(0, min(25, (70 - x) / 40 * 25)) if pd.notna(x) else 12.5
+            )
+            skor += rsi_skorü - 12.5
+        
+        # MACD katkısı (20 puan)
+        if "macd" in df.columns and "macd_signal" in df.columns:
+            macd_yonu = np.where(df["macd"] > df["macd_signal"], 10, -10)
+            macd_ivme = np.where(df["macd_hist"] > 0, 
+                                  np.where(df["macd_hist"] > df["macd_hist"].shift(1), 10, 5),
+                                  np.where(df["macd_hist"] < df["macd_hist"].shift(1), -10, -5))
+            skor += (macd_yonu + macd_ivme) / 2
+        
+        # EMA Trend katkısı (20 puan)
+        if "ema_50" in df.columns and "ema_200" in df.columns:
+            trend_skoru = np.where(df["ema_50"] > df["ema_200"], 10, -10)
+            fiyat_ema50 = np.where(df["close"] > df["ema_50"], 5, -5)
+            skor += trend_skoru + fiyat_ema50
+        
+        # Bollinger katkısı (15 puan)
+        if "bb_pct" in df.columns:
+            bb_skor = df["bb_pct"].apply(lambda x:
+                max(-7.5, min(7.5, (0.5 - x) * 15)) if pd.notna(x) else 0
+            )
+            skor += bb_skor
+        
+        # Stochastic katkısı (10 puan)
+        if "stoch_k" in df.columns:
+            stoch_skor = df["stoch_k"].apply(lambda x:
+                max(-5, min(5, (50 - x) / 10)) if pd.notna(x) else 0
+            )
+            skor += stoch_skor
+        
+        # ADX trend gücü katkısı (10 puan) - güçlü trend skoru artırır
+        if "adx" in df.columns:
+            adx_carpan = df["adx"].apply(lambda x: min(1.0, x / 25) if pd.notna(x) else 0.5)
+            skor = 50 + (skor - 50) * (0.5 + adx_carpan * 0.5)
+        
+        # Skoru 0-100 aralığında sınırla
+        skor = skor.clip(0, 100).round(1)
+    
+    except Exception as e:
+        print(f"Skor hesaplama hatası: {e}")
+    
+    return skor
+
+
+# ─── Filtreleme Fonksiyonları ──────────────────────────────────────────────
+
+def rsi_asiri_satis_filtrele(df_dict: dict, esik: float = 30) -> list:
+    """RSI < eşik olan sembolleri listeler."""
+    return [
+        sembol for sembol, df in df_dict.items()
+        if "rsi_14" in df.columns and 
+        pd.notna(df["rsi_14"].iloc[-1]) and 
+        df["rsi_14"].iloc[-1] < esik
+    ]
+
+
+def golden_cross_filtrele(df_dict: dict) -> list:
+    """Son golden cross oluşan sembolleri listeler."""
+    sonuc = []
+    for sembol, df in df_dict.items():
+        if "golden_cross" in df.columns:
+            son_30 = df.tail(30)
+            if son_30["golden_cross"].sum() > 0:
+                sonuc.append(sembol)
+    return sonuc
+
+
+def yuksek_hacim_filtrele(df_dict: dict, carpan: float = 1.5) -> list:
+    """Son günkü hacmi ortalamanın N katından fazla olan sembolleri listeler."""
+    return [
+        sembol for sembol, df in df_dict.items()
+        if len(df) > 20 and 
+        df["volume"].iloc[-1] > df["volume"].rolling(20).mean().iloc[-1] * carpan
+    ]
+
+
+def trend_yukari_filtrele(df_dict: dict) -> list:
+    """EMA50 > EMA200 olan (yükseliş trendinde) sembolleri listeler."""
+    return [
+        sembol for sembol, df in df_dict.items()
+        if "ema_50" in df.columns and "ema_200" in df.columns and
+        pd.notna(df["ema_50"].iloc[-1]) and pd.notna(df["ema_200"].iloc[-1]) and
+        df["ema_50"].iloc[-1] > df["ema_200"].iloc[-1]
+    ]
+
+
+def ozet_istatistikler(df: pd.DataFrame) -> Dict:
+    """Son bar için özet istatistik sözlüğü döner."""
+    son = df.iloc[-1]
+    
+    istatistikler = {
+        "son_fiyat": son.get("close", None),
+        "rsi_14": son.get("rsi_14", None),
+        "rsi_9": son.get("rsi_9", None),
+        "macd": son.get("macd", None),
+        "macd_hist": son.get("macd_hist", None),
+        "adx": son.get("adx", None),
+        "atr_pct": son.get("atr_pct", None),
+        "bb_pct": son.get("bb_pct", None),
+        "stoch_k": son.get("stoch_k", None),
+        "mfi": son.get("mfi", None),
+        "cci": son.get("cci", None),
+        "willr": son.get("willr", None),
+        "obv": son.get("obv", None),
+        "cmf": son.get("cmf", None),
+        "vwap_ustunde": bool(son.get("vwap_ustunde", False)),
+        "trend_yonu": son.get("trend_yonu", "Belirsiz"),
+        "teknik_skor": son.get("teknik_skor", 50),
+        "golden_cross": bool(son.get("golden_cross", False)),
+        "death_cross": bool(son.get("death_cross", False)),
+    }
+    
+    return istatistikler
