@@ -12,12 +12,16 @@ API Anahtarları:
     ANTHROPIC_API_KEY = "..."
 """
 
+import sys
 import streamlit as st
 import pandas as pd
 import numpy as np
 import time
 from datetime import datetime
 import os
+
+# Streamlit Cloud path fix
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ─── Sayfa Yapılandırması ─────────────────────────────────────────────────
 st.set_page_config(
